@@ -1,0 +1,6 @@
+{
+  "name": "Avichas Metrics Digital Platform",
+  "description": "Corporate website, Naira subscription management, school AI licensing portal, Avichas Academy LMS, Insights blog, and central administration platform for Avichas Metrics Limited (CAC: 9880947).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

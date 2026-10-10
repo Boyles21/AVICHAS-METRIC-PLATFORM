@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+:root {
+  /* Reconciled Brand Tokens: Part I & Part II */
+  --avichas-navy: #0B1F33;
+  --avichas-charcoal: #2E3A44;
+  --avichas-gold-part1: #C9B58B;
+  --avichas-gold-part2: #B5965A;
+  --avichas-stone: #EDE7D9;
+  --avichas-obsidian-tint: #C8C1B5;
+  --avichas-ai-blue: #4778A8;
+  --avichas-ivory: #F9F8F5;
+
+  --font-display-part2: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
+  --font-body-part2: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display-part1: 'Playfair Display', Georgia, serif;
+  --font-body-part1: 'Montserrat', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+.theme-part-ii {
+  --brand-primary: #0B1F33;
+  --brand-accent: #B5965A;
+  --brand-secondary: #4778A8;
+  --brand-surface: #F9F8F5;
+  --brand-muted-surface: #C8C1B5;
+  --font-heading: var(--font-display-part2);
+  --font-sans: var(--font-body-part2);
+}
+
+.theme-part-i {
+  --brand-primary: #0B1F33;
+  --brand-accent: #C9B58B;
+  --brand-secondary: #2E3A44;
+  --brand-surface: #EDE7D9;
+  --brand-muted-surface: #E2DAC8;
+  --font-heading: var(--font-display-part1);
+  --font-sans: var(--font-body-part1);
+}
+
+body {
+  font-family: var(--font-sans, 'Plus Jakarta Sans', sans-serif);
+  color: #0B1F33;
+  background-color: #F9F8F5;
+}
+
+.font-editorial {
+  font-family: var(--font-heading, 'Cormorant Garamond', 'Playfair Display', Georgia, serif);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
