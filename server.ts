@@ -11,7 +11,6 @@ import dotenv from 'dotenv';
 import express, { NextFunction, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import {
   checkRateLimit,
   createSession,
@@ -154,9 +153,8 @@ export async function executeMaintenance(actor = 'cron_maintenance', reason = 'S
   }
 }
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   // STAGE 1 Requirement 5: Set trust proxy for Render / Cloud Run reverse proxy IP accuracy
   app.set('trust proxy', 1);
@@ -209,15 +207,8 @@ async function startServer() {
     next();
   });
 
-  // Scheduled interval maintenance in process
-  setInterval(() => {
-    executeMaintenance().catch((err) => {
-      console.error('[MAINTENANCE INTERVAL ERROR]', err.message);
-    });
-  }, 10 * 60 * 1000);
-
   // Health endpoint
-  app.get('/health', (_req, res) => {
+  app.get(['/health', '/api/health'], (_req, res) => {
     res.json({
       status: 'healthy',
       time: new Date().toISOString(),
@@ -288,11 +279,15 @@ async function startServer() {
           // Create Organisation if provided
           let orgId: string | null = null;
           if (organisationName) {
-            const orgRes = await client.query(
-              `INSERT INTO public.organisations (name) VALUES ($1) RETURNING id;`,
-              [String(organisationName).trim()]
+            // Row Level Security: scope this transaction to the new organisation so the
+            // insert is allowed for exactly this one row and nothing else.
+            const newOrgId = crypto.randomUUID();
+            await client.query(`SELECT set_config('app.org_id', $1, true)`, [newOrgId]);
+            await client.query(
+              `INSERT INTO public.organisations (id, name) VALUES ($1, $2);`,
+              [newOrgId, String(organisationName).trim()]
             );
-            orgId = orgRes.rows[0].id;
+            orgId = newOrgId;
           }
 
           // Create User (always role 'customer', email_verified = false)
@@ -471,7 +466,7 @@ async function startServer() {
 
     res.cookie(SESSION_COOKIE_NAME, 'mock_session_123', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'production' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME),
       sameSite: 'lax',
       path: '/',
     });
@@ -1136,24 +1131,5 @@ async function startServer() {
     });
   });
 
-  // Mount Vite middlewares in development or static build in production
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Avichas Metrics Platform running on http://0.0.0.0:${PORT} (Trust Proxy: 1)`);
-  });
+  return app;
 }
-
-startServer();
