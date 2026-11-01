@@ -2,6 +2,9 @@
   command = "npm install && npm run build && npm run migrate"
   publish = "dist"
 
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "EMAIL_FROM"
+
 [functions]
   node_bundler = "esbuild"
 
