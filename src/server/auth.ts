@@ -216,7 +216,7 @@ export async function createSession(
     [sessionId, userId, expiresAt.toISOString(), ipAddress, userAgent]
   );
 
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
 
   res.cookie(SESSION_COOKIE_NAME, sessionId, {
     httpOnly: true,
