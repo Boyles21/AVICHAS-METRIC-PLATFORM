@@ -1,16 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Building2,
-  CheckCircle2,
-  FileText,
-  GraduationCap,
-  KeyRound,
-  LayoutDashboard,
-  MessageSquare,
-  Palette,
+  Menu,
   PhoneCall,
-  ShieldCheck,
-  UserCheck,
+  User,
+  X,
 } from 'lucide-react';
 import { LegalPolicyDocument, UserProfile } from '../types';
 
@@ -25,17 +19,13 @@ export type ActivePage =
   | 'contact'
   | 'portal'
   | 'admin'
-  | 'legal'
-  | 'register_spec';
+  | 'legal';
 
 interface NavbarProps {
   activePage: ActivePage;
   onNavigate: (page: ActivePage, subTarget?: string) => void;
-  currentUser: UserProfile;
-  allPersonaUsers: UserProfile[];
-  onSwitchUser: (userId: string) => void;
-  brandTheme: 'part-ii' | 'part-i';
-  onToggleBrandTheme: () => void;
+  currentUser: UserProfile | null;
+  onSignOut?: () => void;
   onOpenAssessmentModal: (defaultService?: string) => void;
 }
 
@@ -43,201 +33,165 @@ export const Navbar: React.FC<NavbarProps> = ({
   activePage,
   onNavigate,
   currentUser,
-  allPersonaUsers,
-  onSwitchUser,
-  brandTheme,
-  onToggleBrandTheme,
+  onSignOut,
   onOpenAssessmentModal,
 }) => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // All 9 Main Navigation items from Part I Section 3
+  const navItems: { id: ActivePage; label: string }[] = [
+    { id: 'home', label: 'Home' },
+    { id: 'services', label: 'Services' },
+    { id: 'schools', label: 'Solutions' },
+    { id: 'subscriptions', label: 'Subscriptions' },
+    { id: 'academy', label: 'Academy' },
+    { id: 'insights', label: 'Insights' },
+    { id: 'about', label: 'About Avichas' },
+    { id: 'contact', label: 'Contact Us' },
+    { id: 'portal', label: currentUser ? 'Client Portal' : 'Sign In' },
+  ];
+
+  const handleNavClick = (page: ActivePage) => {
+    onNavigate(page);
+    setMobileMenuOpen(false);
+  };
+
   return (
     <div className="sticky top-0 z-40 bg-[#0B1F33] text-white border-b border-white/10">
-      {/* Mandatory 3-Zone Top Bar Contract */}
-      <header className="max-w-[1360px] mx-auto flex items-center justify-between gap-8 px-6 py-4">
-        {/* Zone 1: Single text element wordmark */}
+      {/* Top Contact & Trust Strip */}
+      <div className="bg-[#071524] text-[11px] text-stone-300 border-b border-white/10 py-1.5 px-6">
+        <div className="max-w-[1360px] mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 font-mono-tabular">
+            <span className="text-[#C9B58B]">CAC: 9880947</span>
+            <span aria-hidden="true" className="text-white/20">·</span>
+            <span className="hidden sm:inline">Make Your Business Work Smarter.</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <a
+              href="tel:+12348156687"
+              className="inline-flex items-center gap-1.5 text-stone-200 hover:text-[#C9B58B] transition-colors font-mono-tabular"
+            >
+              <PhoneCall className="w-3 h-3 text-[#C9B58B]" />
+              <span>Ava AI Receptionist: +1 (234) 815-6687</span>
+            </a>
+
+            {currentUser && (
+              <div className="hidden md:flex items-center gap-2 pl-2 border-l border-white/20">
+                <span className="text-white font-medium">{currentUser.name}</span>
+                <span className="text-[#C9B58B] font-mono-tabular">({currentUser.role.toUpperCase()})</span>
+                {currentUser.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => handleNavClick('admin')}
+                    className="ml-1 text-[11px] text-[#C9B58B] hover:underline font-semibold"
+                  >
+                    Admin Console
+                  </button>
+                )}
+                {onSignOut && (
+                  <button
+                    type="button"
+                    onClick={onSignOut}
+                    className="ml-2 text-stone-400 hover:text-white underline"
+                  >
+                    Sign Out
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Header with All 9 Main Nav Items */}
+      <header className="max-w-[1360px] mx-auto flex items-center justify-between gap-4 px-6 py-3.5">
+        {/* Brand Wordmark */}
         <button
           type="button"
-          onClick={() => onNavigate('home')}
-          className="text-xl font-semibold tracking-tight text-white font-editorial whitespace-nowrap shrink-0 text-left focus-visible:outline-2 focus-visible:outline-[#B5965A]"
+          onClick={() => handleNavClick('home')}
+          className="text-xl font-semibold tracking-tight text-white font-editorial whitespace-nowrap shrink-0 text-left"
         >
           Avichas Metrics
         </button>
 
-        {/* Zone 2: 5 concise single-line text navigation links */}
-        <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-stone-300">
-          <button
-            type="button"
-            onClick={() => onNavigate('services')}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-              activePage === 'services' ? 'border-[#B5965A] text-white' : 'border-transparent'
-            }`}
-          >
-            Services
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('schools')}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-              activePage === 'schools' ? 'border-[#B5965A] text-white' : 'border-transparent'
-            }`}
-          >
-            School Solutions
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('subscriptions')}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-              activePage === 'subscriptions' ? 'border-[#B5965A] text-white' : 'border-transparent'
-            }`}
-          >
-            Subscriptions
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('academy')}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-              activePage === 'academy' ? 'border-[#B5965A] text-white' : 'border-transparent'
-            }`}
-          >
-            Academy
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('insights')}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-              activePage === 'insights' ? 'border-[#B5965A] text-white' : 'border-transparent'
-            }`}
-          >
-            Insights
-          </button>
+        {/* Desktop Navigation: All 9 Main Items visible */}
+        <nav className="hidden lg:flex items-center gap-5 text-xs font-medium text-stone-200">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => handleNavClick(item.id)}
+              className={`hover:text-white transition-colors whitespace-nowrap py-1 border-b-2 ${
+                activePage === item.id ? 'border-[#C9B58B] text-white font-semibold' : 'border-transparent text-stone-300'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </nav>
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center shrink-0">
+        {/* Primary Action Button & Mobile Hamburger Toggle */}
+        <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
             onClick={() => onOpenAssessmentModal()}
-            className="px-4 py-2 text-xs font-semibold text-[#0B1F33] bg-[#C9B58B] hover:bg-[#B5965A] rounded-md transition-colors whitespace-nowrap shrink-0"
+            className="px-4 py-2 text-xs font-semibold text-[#0B1F33] bg-[#C9B58B] hover:bg-[#B5965A] rounded-md transition-colors whitespace-nowrap"
           >
             Start an Assessment
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="lg:hidden p-2 text-stone-300 hover:text-white"
+            aria-label="Toggle navigation menu"
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </header>
 
-      {/* Secondary Workspace & Ecosystem Toolbar (Below Header) */}
-      <div className="bg-[#071524] border-t border-white/10 text-xs text-stone-300">
-        <div className="max-w-[1360px] mx-auto px-6 py-2 flex flex-wrap items-center justify-between gap-4">
-          {/* Left: Full Architecture Pathways */}
-          <div className="flex items-center gap-4 overflow-x-auto py-0.5">
+      {/* Mobile Menu Dropdown: All 9 Items */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden bg-[#071524] border-t border-white/10 px-6 py-4 space-y-2 text-sm">
+          {navItems.map((item) => (
             <button
+              key={item.id}
               type="button"
-              onClick={() => onNavigate('home')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'home' ? 'text-[#C9B58B] font-semibold' : ''
+              onClick={() => handleNavClick(item.id)}
+              className={`block w-full text-left py-2 px-3 rounded text-xs ${
+                activePage === item.id ? 'bg-[#0B1F33] text-[#C9B58B] font-semibold' : 'text-stone-300 hover:text-white'
               }`}
             >
-              Overview
+              {item.label}
             </button>
-            <span aria-hidden="true" className="text-white/20">·</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('about')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'about' ? 'text-[#C9B58B] font-semibold' : ''
-              }`}
-            >
-              About Avichas
-            </button>
-            <span aria-hidden="true" className="text-white/20">·</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('contact')}
-              className={`hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'contact' ? 'text-[#C9B58B] font-semibold' : ''
-              }`}
-            >
-              Contact Us
-            </button>
-            <span aria-hidden="true" className="text-white/20">·</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('portal')}
-              className={`inline-flex items-center gap-1.5 hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'portal' ? 'text-[#C9B58B] font-semibold' : ''
-              }`}
-            >
-              <Building2 className="w-3.5 h-3.5 text-[#C9B58B]" />
-              Client Portal
-            </button>
-            <span aria-hidden="true" className="text-white/20">·</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('admin')}
-              className={`inline-flex items-center gap-1.5 hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'admin' ? 'text-[#C9B58B] font-semibold' : ''
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5 text-[#C9B58B]" />
-              Central Admin
-            </button>
-            <span aria-hidden="true" className="text-white/20">·</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('register_spec')}
-              className={`inline-flex items-center gap-1.5 hover:text-white transition-colors whitespace-nowrap shrink-0 ${
-                activePage === 'register_spec' ? 'text-[#C9B58B] font-semibold' : ''
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-[#C9B58B]" />
-              Pre-Launch Register & Spec
-            </button>
-          </div>
+          ))}
 
-          {/* Right: Ava Phone Channel + Active Role Persona + Brand Token Switcher */}
-          <div className="flex items-center gap-4 flex-wrap">
-            <a
-              href="tel:+12348156687"
-              className="inline-flex items-center gap-1.5 text-stone-200 hover:text-[#C9B58B] transition-colors whitespace-nowrap shrink-0 font-mono-tabular"
-              title="Call Ava — Avichas Metrics AI Phone Receptionist"
-            >
-              <PhoneCall className="w-3.5 h-3.5 text-[#C9B58B]" />
-              <span>Ava AI Receptionist: +1 (234) 815-6687</span>
-            </a>
-
-            <span aria-hidden="true" className="text-white/20 hidden sm:inline">|</span>
-
+          {currentUser?.role === 'admin' && (
             <button
               type="button"
-              onClick={onToggleBrandTheme}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-white/10 hover:bg-white/15 text-stone-200 transition-colors whitespace-nowrap shrink-0"
-              title="Reconcile Part I vs Part II Brand Tokens (Page 14-15 Note)"
+              onClick={() => handleNavClick('admin')}
+              className="block w-full text-left py-2 px-3 rounded text-xs text-[#C9B58B] font-semibold"
             >
-              <Palette className="w-3.5 h-3.5 text-[#C9B58B]" />
-              <span>
-                Tokens: {brandTheme === 'part-ii' ? 'Part II (Canela / Muted Gold)' : 'Part I (Playfair / Stone)'}
-              </span>
+              Central Administration Console
             </button>
+          )}
 
-            <div className="flex items-center gap-1.5">
-              <UserCheck className="w-3.5 h-3.5 text-[#C9B58B]" />
-              <label htmlFor="persona-select" className="sr-only">
-                Active Role Persona
-              </label>
-              <select
-                id="persona-select"
-                value={currentUser.id}
-                onChange={(e) => onSwitchUser(e.target.value)}
-                className="bg-[#0B1F33] border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-[#C9B58B]"
-              >
-                {allPersonaUsers.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    Role: {u.role.toUpperCase()} — {u.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          {currentUser && onSignOut && (
+            <button
+              type="button"
+              onClick={() => {
+                onSignOut();
+                setMobileMenuOpen(false);
+              }}
+              className="block w-full text-left py-2 px-3 rounded text-xs text-stone-400 hover:text-white"
+            >
+              Sign Out ({currentUser.email})
+            </button>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -264,10 +218,9 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
             </p>
             <div className="text-xs text-stone-400 space-y-1 font-mono-tabular pt-1">
               <div>CAC Registration: 9880947</div>
-              <div>Closing Statement: Trusted foundation for intelligent execution.</div>
+              <div>Trusted foundation for intelligent execution.</div>
             </div>
 
-            {/* Distinct Official Contact Channels (Part II Section 1) */}
             <div className="pt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <a
                 href="tel:+12348156687"
@@ -275,7 +228,7 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
               >
                 <div className="text-xs text-[#C9B58B] font-medium">AI Receptionist — Phone Calls</div>
                 <div className="text-sm font-semibold text-white font-mono-tabular mt-0.5">+1 (234) 815-6687</div>
-                <div className="text-xs text-stone-400 mt-0.5">Handled by Ava (Voice Line Only)</div>
+                <div className="text-xs text-stone-400 mt-0.5">Handled by Ava (Voice Line)</div>
               </a>
 
               <a
@@ -286,14 +239,14 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
               >
                 <div className="text-xs text-[#C9B58B] font-medium">WhatsApp Business Enquiries</div>
                 <div className="text-sm font-semibold text-white font-mono-tabular mt-0.5">08165705114</div>
-                <div className="text-xs text-stone-400 mt-0.5">Intl: +234 816 570 5114 (Chat Channel)</div>
+                <div className="text-xs text-stone-400 mt-0.5">Intl: +234 816 570 5114</div>
               </a>
             </div>
           </div>
 
-          {/* Col 3: Platform Architecture */}
+          {/* Col 3: Navigation Links */}
           <div className="space-y-3">
-            <div className="text-xs font-semibold text-white tracking-wider uppercase">Platform & Portals</div>
+            <div className="text-xs font-semibold text-white tracking-wider uppercase">Platform & Services</div>
             <ul className="space-y-2 text-sm">
               <li>
                 <button type="button" onClick={() => onNavigate('services')} className="hover:text-white transition-colors">
@@ -302,7 +255,7 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
               </li>
               <li>
                 <button type="button" onClick={() => onNavigate('schools')} className="hover:text-white transition-colors">
-                  School AI & Licensing Portal
+                  School Solutions
                 </button>
               </li>
               <li>
@@ -311,17 +264,34 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
                   onClick={() => onNavigate('subscriptions')}
                   className="hover:text-white transition-colors"
                 >
-                  Naira Subscriptions & Pricing
+                  Subscriptions & Pricing
                 </button>
               </li>
               <li>
                 <button type="button" onClick={() => onNavigate('academy')} className="hover:text-white transition-colors">
-                  Avichas Academy LMS
+                  Avichas Academy
                 </button>
               </li>
               <li>
                 <button type="button" onClick={() => onNavigate('insights')} className="hover:text-white transition-colors">
-                  Insights & AI News Blog
+                  Insights & AI Blog
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          {/* Col 4: Corporate & Client Portal */}
+          <div className="space-y-3">
+            <div className="text-xs font-semibold text-white tracking-wider uppercase">Company & Support</div>
+            <ul className="space-y-2 text-sm">
+              <li>
+                <button type="button" onClick={() => onNavigate('about')} className="hover:text-white transition-colors">
+                  About Avichas
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => onNavigate('contact')} className="hover:text-white transition-colors">
+                  Contact Us
                 </button>
               </li>
               <li>
@@ -332,47 +302,7 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
             </ul>
           </div>
 
-          {/* Col 4: Governance & Developer Handover */}
-          <div className="space-y-3">
-            <div className="text-xs font-semibold text-white tracking-wider uppercase">Governance & Spec</div>
-            <ul className="space-y-2 text-sm">
-              <li>
-                <button type="button" onClick={() => onNavigate('about')} className="hover:text-white transition-colors">
-                  About Avichas Metrics
-                </button>
-              </li>
-              <li>
-                <button type="button" onClick={() => onNavigate('contact')} className="hover:text-white transition-colors">
-                  Contact & Assessment Desk
-                </button>
-              </li>
-              <li>
-                <button type="button" onClick={() => onNavigate('admin')} className="hover:text-white transition-colors">
-                  Central Administration
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('register_spec')}
-                  className="hover:text-white transition-colors text-[#C9B58B]"
-                >
-                  Pre-Launch Confirmation Register
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('register_spec', 'phases')}
-                  className="hover:text-white transition-colors"
-                >
-                  5-Phase Delivery Roadmap
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          {/* Col 5: Required Legal & Trust Section (Part II Section 4) */}
+          {/* Col 5: Required Legal Policies */}
           <div className="space-y-3">
             <div className="text-xs font-semibold text-white tracking-wider uppercase">Legal & Trust Policies</div>
             <ul className="space-y-2 text-sm">
@@ -400,18 +330,6 @@ export const Footer: React.FC<FooterProps> = ({ policies, onNavigate, onOpenPoli
           </div>
         </div>
       </div>
-
-      {/* Floating WhatsApp Business Contact Icon (Part II Section 1B — Distinct from Ava AI Phone Line) */}
-      <a
-        href="https://wa.me/2348165705114?text=Hello%20Avichas%20Metrics%20Limited%2C%20I%20have%20an%20enquiry%20about%20your%20services."
-        target="_blank"
-        rel="noopener noreferrer"
-        className="fixed bottom-5 right-5 z-30 inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-[#0B1F33] text-white border border-[#C9B58B] shadow-lg hover:bg-[#14314F] transition-colors text-xs font-medium"
-        aria-label="Open WhatsApp Business Chat with Avichas Metrics Limited (08165705114)"
-      >
-        <MessageSquare className="w-4 h-4 text-[#C9B58B]" />
-        <span>WhatsApp Business: 08165705114</span>
-      </a>
     </footer>
   );
 };

@@ -49,12 +49,10 @@ import {
 
 export default function App() {
   const [activePage, setActivePage] = useState<ActivePage>('home');
-  const [brandTheme, setBrandTheme] = useState<'part-ii' | 'part-i'>('part-ii');
 
-  // Persona / Role Switcher State (Demonstrating Server-Side RBAC & Organisation Isolation)
-  const [activeUserId, setActiveUserId] = useState<string>(INITIAL_USERS[0].id);
-  const [currentUser, setCurrentUser] = useState<UserProfile>(INITIAL_USERS[0]);
-  const [allUsers, setAllUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  // Authenticated Profile State (Backed by Neon Postgres Auth & verified by Express server)
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
   // Platform Entities State
   const [services, setServices] = useState<ServiceItem[]>(INITIAL_SERVICES);
@@ -86,40 +84,64 @@ export default function App() {
   const [modalMessage, setModalMessage] = useState('');
   const [modalSubmitted, setModalSubmitted] = useState(false);
 
-  const fetchPlatformBootstrap = useCallback(async (userIdToUse = activeUserId) => {
+  // 1. Fetch Public Bootstrap Data (Services, Plans, Published Posts, Courses)
+  const fetchPublicData = useCallback(async () => {
     try {
-      const res = await fetch('/api/bootstrap', {
-        headers: {
-          'x-avichas-user-id': userIdToUse,
-        },
+      const res = await fetch('/api/public/bootstrap');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.services) setServices(data.services);
+      if (data.plans) setPlans(data.plans);
+      if (data.courses) setCourses(data.courses);
+      if (data.blogPosts) setBlogPosts(data.blogPosts);
+      if (data.policies) setPolicies(data.policies);
+    } catch {
+      // Fallback to initial seeds
+    }
+  }, []);
+
+  // 2. Fetch Authenticated Portal Data using HttpOnly Session Cookie
+  const fetchPortalData = useCallback(async (token?: string) => {
+    try {
+      const headers: HeadersInit = {};
+      if (token && token !== 'session') {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch('/api/portal/me', {
+        headers,
+        credentials: 'include',
       });
       if (!res.ok) return;
       const data = await res.json();
-      if (data.currentUser) setCurrentUser(data.currentUser);
-      if (Array.isArray(data.users) && data.users.length > 1) {
-        setAllUsers(data.users);
-      }
-      if (data.services) setServices(data.services);
-      if (data.plans) setPlans(data.plans);
+      if (data.profile) setCurrentUser(data.profile);
       if (data.subscriptions) setSubscriptions(data.subscriptions);
       if (data.invoices) setInvoices(data.invoices);
       if (data.schoolLicences) setSchoolLicences(data.schoolLicences);
-      if (data.courses) setCourses(data.courses);
       if (data.enrolments) setEnrolments(data.enrolments);
-      if (data.blogPosts) setBlogPosts(data.blogPosts);
-      if (data.policies) setPolicies(data.policies);
-      if (data.confirmations) setConfirmations(data.confirmations);
-      if (data.enquiries) setEnquiries(data.enquiries);
-      if (data.auditLogs) setAuditLogs(data.auditLogs);
-      if (data.developmentPhases) setDevelopmentPhases(data.developmentPhases);
     } catch {
-      // Fallback to seeded state if offline
+      // ignore
     }
-  }, [activeUserId]);
+  }, []);
 
+  // Check Session on App Mount
   useEffect(() => {
-    fetchPlatformBootstrap(activeUserId);
-  }, [activeUserId, fetchPlatformBootstrap]);
+    fetchPublicData();
+    fetchPortalData();
+  }, [fetchPublicData, fetchPortalData]);
+
+  const handleSignOut = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {
+      // ignore
+    }
+    setAuthToken(null);
+    setCurrentUser(null);
+    setActivePage('home');
+  };
 
   const handleNavigate = (page: ActivePage, subTarget?: string) => {
     setActivePage(page);
@@ -144,12 +166,6 @@ export default function App() {
     setSelectedPolicySlug(policySlug);
     setActivePage('legal');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleSwitchUser = (newUserId: string) => {
-    setActiveUserId(newUserId);
-    const found = allUsers.find((u) => u.id === newUserId) || INITIAL_USERS.find((u) => u.id === newUserId);
-    if (found) setCurrentUser(found);
   };
 
   const handleOpenAssessmentModal = (defaultService?: string) => {
@@ -180,24 +196,17 @@ export default function App() {
       setModalEmail('');
       setModalPhone('');
       setModalMessage('');
-      await fetchPlatformBootstrap();
+      await fetchPublicData();
     }
   };
 
   return (
-    <div
-      className={`min-h-screen flex flex-col ${
-        brandTheme === 'part-ii' ? 'theme-part-ii bg-[#F9F8F5]' : 'theme-part-i bg-[#EDE7D9]/45'
-      }`}
-    >
+    <div className="min-h-screen flex flex-col theme-part-ii bg-[#F9F8F5]">
       <Navbar
         activePage={activePage}
         onNavigate={handleNavigate}
         currentUser={currentUser}
-        allPersonaUsers={INITIAL_USERS}
-        onSwitchUser={handleSwitchUser}
-        brandTheme={brandTheme}
-        onToggleBrandTheme={() => setBrandTheme((prev) => (prev === 'part-ii' ? 'part-i' : 'part-ii'))}
+        onSignOut={handleSignOut}
         onOpenAssessmentModal={handleOpenAssessmentModal}
       />
 
@@ -225,10 +234,10 @@ export default function App() {
 
         {activePage === 'schools' && (
           <SchoolPortalView
-            currentUser={currentUser}
+            currentUser={currentUser || INITIAL_USERS[3]}
             schoolLicences={schoolLicences}
             plans={plans}
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
+            onRefreshData={fetchPublicData}
           />
         )}
 
@@ -238,9 +247,16 @@ export default function App() {
             plans={plans}
             subscriptions={subscriptions}
             invoices={invoices}
-            initialTab="plans"
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
-            onSwitchUser={handleSwitchUser}
+            onRefreshData={() => {
+              if (authToken) fetchPortalData(authToken);
+              return fetchPublicData();
+            }}
+            onSignInSuccess={(profile, token) => {
+              setCurrentUser(profile);
+              setAuthToken(token);
+              fetchPortalData(token);
+            }}
+            onSignOut={handleSignOut}
           />
         )}
 
@@ -250,18 +266,25 @@ export default function App() {
             plans={plans}
             subscriptions={subscriptions}
             invoices={invoices}
-            initialTab="dashboard"
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
-            onSwitchUser={handleSwitchUser}
+            onRefreshData={() => {
+              if (authToken) fetchPortalData(authToken);
+              return fetchPublicData();
+            }}
+            onSignInSuccess={(profile, token) => {
+              setCurrentUser(profile);
+              setAuthToken(token);
+              fetchPortalData(token);
+            }}
+            onSignOut={handleSignOut}
           />
         )}
 
         {activePage === 'academy' && (
           <AcademyView
-            currentUser={currentUser}
+            currentUser={currentUser || INITIAL_USERS[4]}
             courses={courses}
             enrolments={enrolments}
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
+            onRefreshData={fetchPublicData}
           />
         )}
 
@@ -269,10 +292,10 @@ export default function App() {
           <InsightsView blogPosts={blogPosts} initialPostId={selectedPostId} />
         )}
 
-        {activePage === 'admin' && (
+        {activePage === 'admin' && currentUser?.role === 'admin' && (
           <AdminDashboardView
             currentUser={currentUser}
-            users={allUsers}
+            users={INITIAL_USERS}
             services={services}
             plans={plans}
             subscriptions={subscriptions}
@@ -284,24 +307,21 @@ export default function App() {
             policies={policies}
             enquiries={enquiries}
             auditLogs={auditLogs}
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
+            onRefreshData={fetchPublicData}
           />
         )}
 
-        {(activePage === 'about' ||
-          activePage === 'contact' ||
-          activePage === 'legal' ||
-          activePage === 'register_spec') && (
+        {(activePage === 'about' || activePage === 'contact' || activePage === 'legal') && (
           <SpecAndLegalView
             mode={activePage}
-            currentUser={currentUser}
+            currentUser={currentUser || INITIAL_USERS[0]}
             policies={policies}
             selectedPolicySlug={selectedPolicySlug}
             confirmations={confirmations}
             developmentPhases={developmentPhases}
-            brandTheme={brandTheme}
-            onToggleBrandTheme={() => setBrandTheme((prev) => (prev === 'part-ii' ? 'part-i' : 'part-ii'))}
-            onRefreshData={() => fetchPlatformBootstrap(activeUserId)}
+            brandTheme="part-ii"
+            onToggleBrandTheme={() => {}}
+            onRefreshData={fetchPublicData}
           />
         )}
       </main>
@@ -340,8 +360,8 @@ export default function App() {
                 <div className="p-4 rounded bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 space-y-1">
                   <div className="font-semibold">Assessment Request Confirmed</div>
                   <p>
-                    Your assessment request has been validated and logged in the Avichas Central Administration
-                    Dashboard. You may also call Ava, our AI Receptionist, directly at +1 (234) 815-6687.
+                    Your assessment request has been validated and logged. You may also call Ava, our AI Receptionist,
+                    directly at +1 (234) 815-6687.
                   </p>
                 </div>
                 <button
