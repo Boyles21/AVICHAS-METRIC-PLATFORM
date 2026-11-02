@@ -737,7 +737,7 @@ export async function createApp() {
         const portalData = await withRequestContext(session, async (client) => {
           // Read user profile
           const userRes = await client.query(
-            `SELECT u.id, u.email, u.full_name, u.phone, u.role, u.organisation_id, u.email_verified,
+            `SELECT u.id, u.email, u.full_name, u.phone, u.role, u.organisation_id, u.email_verified, u.created_at,
                     o.name AS organisation_name
              FROM public.users u
              LEFT JOIN public.organisations o ON u.organisation_id = o.id
@@ -752,7 +752,7 @@ export async function createApp() {
 
           // Read tenant invoices (Filtered automatically by RLS)
           const invRes = await client.query(
-            `SELECT * FROM public.invoices ORDER BY issue_date DESC;`
+            `SELECT * FROM public.invoices ORDER BY issued_at DESC;`
           );
 
           // Read tenant school licences (Filtered automatically by RLS)
@@ -766,7 +766,17 @@ export async function createApp() {
           );
 
           return {
-            profile: userRes.rows[0],
+            profile: userRes.rows[0] && {
+              id: userRes.rows[0].id,
+              name: userRes.rows[0].full_name,
+              email: userRes.rows[0].email,
+              role: userRes.rows[0].role,
+              organisationName: userRes.rows[0].organisation_name || '',
+              organisationId: userRes.rows[0].organisation_id || '',
+              phone: userRes.rows[0].phone || '',
+              status: userRes.rows[0].email_verified ? 'Active' : 'Pending Verification',
+              createdAt: userRes.rows[0].created_at,
+            },
             subscriptions: subRes.rows,
             invoices: invRes.rows,
             schoolLicences: licRes.rows,
