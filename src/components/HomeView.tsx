@@ -473,7 +473,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <div>
                 <div className="h-48 overflow-hidden bg-stone-100">
                   <img
-                    src={post.imageUrl}
+                    src={post.imageUrl?.trim() || GENERATED_IMAGES.insightsOperations}
                     alt={post.title}
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"

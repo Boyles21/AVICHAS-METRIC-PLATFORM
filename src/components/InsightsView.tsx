@@ -8,6 +8,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { BlogCategory, BlogPost } from '../types';
+import { GENERATED_IMAGES } from '../data/seedData';
 
 interface InsightsViewProps {
   blogPosts: BlogPost[];
@@ -79,7 +80,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({ blogPosts, initialPo
         <article className="bg-white border border-stone-200 rounded-md overflow-hidden">
           <div className="h-72 sm:h-96 overflow-hidden bg-stone-100">
             <img
-              src={activePost.imageUrl}
+              src={activePost.imageUrl?.trim() || GENERATED_IMAGES.insightsOperations}
               alt={activePost.title}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover"
@@ -244,7 +245,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({ blogPosts, initialPo
             </div>
             <div className="lg:col-span-5 min-h-[260px]">
               <img
-                src={featuredPost.imageUrl}
+                src={featuredPost.imageUrl?.trim() || GENERATED_IMAGES.insightsOperations}
                 alt={featuredPost.title}
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
@@ -264,7 +265,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({ blogPosts, initialPo
             <div>
               <div className="h-48 overflow-hidden bg-stone-100">
                 <img
-                  src={post.imageUrl}
+                  src={post.imageUrl?.trim() || GENERATED_IMAGES.insightsOperations}
                   alt={post.title}
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover"

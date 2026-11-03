@@ -49,9 +49,9 @@ export const AcademyView: React.FC<AcademyViewProps> = ({
     try {
       const res = await fetch('/api/academy/enrol', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'x-avichas-user-id': currentUser.id,
         },
         body: JSON.stringify({ courseId: course.id }),
       });
@@ -67,9 +67,9 @@ export const AcademyView: React.FC<AcademyViewProps> = ({
   const handleToggleLessonCompletion = async (enrolmentId: string, lessonId: string) => {
     await fetch(`/api/academy/enrolments/${enrolmentId}/toggle-lesson`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({ lessonId }),
     });

@@ -72,9 +72,9 @@ export const SchoolPortalView: React.FC<SchoolPortalViewProps> = ({
     try {
       const res = await fetch('/api/payments/verify', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'x-avichas-user-id': currentUser.id,
         },
         body: JSON.stringify({
           planId: selectedPlanId,
@@ -127,9 +127,9 @@ export const SchoolPortalView: React.FC<SchoolPortalViewProps> = ({
     setVaultMessage(null);
     const res = await fetch(`/api/schools/${selectedVaultLicId}/credentials`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({
         providerName: aiProviderName,

@@ -106,9 +106,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setRbacErrorBanner(null);
     const res = await fetch(url, {
       method: 'PATCH',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify(body),
     });
@@ -125,9 +125,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setRbacErrorBanner(null);
     const res = await fetch('/api/blog', {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({
         title: newPostTitle,
@@ -157,9 +157,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setCmsSavedNotice(null);
     const res = await fetch(`/api/services/${editingServiceId}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({
         startingPriceNgn: Number(editServicePrice),
@@ -171,7 +171,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     if (!res.ok) {
       setRbacErrorBanner(data.message || data.error);
     } else {
-      setCmsSavedNotice(`Updated ${data.service.title} live without editing source code.`);
+      setCmsSavedNotice(`Updated ${data.service?.title || 'Service'} live without editing source code.`);
       await onRefreshData();
     }
   };
@@ -179,7 +179,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const handleTriggerDataExport = async (entity: string) => {
     setRbacErrorBanner(null);
     const res = await fetch(`/api/export/${entity}`, {
-      headers: { 'x-avichas-user-id': currentUser.id },
+      credentials: 'include',
     });
     const data = await res.json();
     if (!res.ok) {

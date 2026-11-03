@@ -70,6 +70,7 @@ export default function App() {
   const [confirmations, setConfirmations] = useState<PreLaunchConfirmationItem[]>(INITIAL_CONFIRMATIONS);
   const [enquiries, setEnquiries] = useState<EnquirySubmission[]>(INITIAL_ENQUIRIES);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(INITIAL_USERS);
   const [developmentPhases, setDevelopmentPhases] = useState<DevelopmentPhaseSpec[]>(DEVELOPMENT_PHASES);
 
   // Assessment Modal State
@@ -100,7 +101,7 @@ export default function App() {
     }
   }, []);
 
-  // 2. Fetch Authenticated Portal Data using HttpOnly Session Cookie
+  // 2. Fetch Authenticated Portal Data & Admin Overview using HttpOnly Session Cookie
   const fetchPortalData = useCallback(async (token?: string) => {
     try {
       const headers: HeadersInit = {};
@@ -118,10 +119,35 @@ export default function App() {
       if (data.invoices) setInvoices(data.invoices);
       if (data.schoolLicences) setSchoolLicences(data.schoolLicences);
       if (data.enrolments) setEnrolments(data.enrolments);
+
+      // Section 18 / Requirement 5: Admin dashboard uses /api/admin/overview for real database records
+      if (data.profile && ['admin', 'editor'].includes(data.profile.role)) {
+        try {
+          const adminRes = await fetch('/api/admin/overview', {
+            headers,
+            credentials: 'include',
+          });
+          if (adminRes.ok) {
+            const adminData = await adminRes.json();
+            if (adminData.users && adminData.users.length > 0) setAllUsers(adminData.users);
+            if (adminData.subscriptions && adminData.subscriptions.length > 0) setSubscriptions(adminData.subscriptions);
+            if (adminData.schoolLicences && adminData.schoolLicences.length > 0) setSchoolLicences(adminData.schoolLicences);
+            if (adminData.enquiries) setEnquiries(adminData.enquiries);
+            if (adminData.auditLogs) setAuditLogs(adminData.auditLogs);
+            if (adminData.confirmations && adminData.confirmations.length > 0) setConfirmations(adminData.confirmations);
+          }
+        } catch {
+          // ignore admin overview network error
+        }
+      }
     } catch {
       // ignore
     }
   }, []);
+
+  const refreshAllData = useCallback(async () => {
+    await Promise.all([fetchPublicData(), fetchPortalData(authToken || undefined)]);
+  }, [fetchPublicData, fetchPortalData, authToken]);
 
   // Check Session on App Mount
   useEffect(() => {
@@ -237,7 +263,7 @@ export default function App() {
             currentUser={currentUser || INITIAL_USERS[3]}
             schoolLicences={schoolLicences}
             plans={plans}
-            onRefreshData={fetchPublicData}
+            onRefreshData={refreshAllData}
           />
         )}
 
@@ -247,10 +273,7 @@ export default function App() {
             plans={plans}
             subscriptions={subscriptions}
             invoices={invoices}
-            onRefreshData={() => {
-              if (authToken) fetchPortalData(authToken);
-              return fetchPublicData();
-            }}
+            onRefreshData={refreshAllData}
             onSignInSuccess={(profile, token) => {
               setCurrentUser(profile);
               setAuthToken(token);
@@ -266,10 +289,7 @@ export default function App() {
             plans={plans}
             subscriptions={subscriptions}
             invoices={invoices}
-            onRefreshData={() => {
-              if (authToken) fetchPortalData(authToken);
-              return fetchPublicData();
-            }}
+            onRefreshData={refreshAllData}
             onSignInSuccess={(profile, token) => {
               setCurrentUser(profile);
               setAuthToken(token);
@@ -284,7 +304,7 @@ export default function App() {
             currentUser={currentUser || INITIAL_USERS[4]}
             courses={courses}
             enrolments={enrolments}
-            onRefreshData={fetchPublicData}
+            onRefreshData={refreshAllData}
           />
         )}
 
@@ -295,7 +315,7 @@ export default function App() {
         {activePage === 'admin' && currentUser?.role === 'admin' && (
           <AdminDashboardView
             currentUser={currentUser}
-            users={INITIAL_USERS}
+            users={allUsers}
             services={services}
             plans={plans}
             subscriptions={subscriptions}
@@ -307,7 +327,7 @@ export default function App() {
             policies={policies}
             enquiries={enquiries}
             auditLogs={auditLogs}
-            onRefreshData={fetchPublicData}
+            onRefreshData={refreshAllData}
           />
         )}
 
@@ -321,7 +341,7 @@ export default function App() {
             developmentPhases={developmentPhases}
             brandTheme="part-ii"
             onToggleBrandTheme={() => {}}
-            onRefreshData={fetchPublicData}
+            onRefreshData={refreshAllData}
           />
         )}
       </main>

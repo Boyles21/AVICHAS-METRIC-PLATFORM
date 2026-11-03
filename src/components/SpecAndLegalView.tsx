@@ -98,9 +98,9 @@ export const SpecAndLegalView: React.FC<SpecAndLegalViewProps> = ({
   const handleUpdateConfirmationStatus = async (id: string, status: PreLaunchConfirmationItem['status']) => {
     await fetch(`/api/confirmations/${id}`, {
       method: 'PATCH',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({ status }),
     });
@@ -113,9 +113,9 @@ export const SpecAndLegalView: React.FC<SpecAndLegalViewProps> = ({
     setPolicyUpdateSaved(null);
     const res = await fetch(`/api/policies/${activePolicy.id}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'x-avichas-user-id': currentUser.id,
       },
       body: JSON.stringify({
         summary: editingPolicySummary,
