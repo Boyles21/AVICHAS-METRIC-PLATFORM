@@ -23,12 +23,34 @@ import {
   verifyPassword,
 } from './src/server/auth';
 import {
+  assertEncryptionConfigured,
+  isProductionRuntime,
+  decryptAiCredential,
+  encryptAiCredential,
+  generateLicenceKey,
+} from './src/server/security';
+import {
   isDbConfigured,
   pool,
   queryWithIdleRetry,
   runAsSystem,
   withRequestContext,
 } from './src/server/db';
+import {
+  mapAuditLogRow,
+  mapBlogPostRow,
+  mapConfirmationRow,
+  mapCourseRow,
+  mapEnquiryRow,
+  mapEnrolmentRow,
+  mapInvoiceRow,
+  mapLicenceRow,
+  mapPlanRow,
+  mapPolicyRow,
+  mapServiceRow,
+  mapSubscriptionRow,
+  mapUserProfileRow,
+} from './src/server/mappers';
 import {
   DEVELOPMENT_PHASES,
   INITIAL_AUDIT_LOGS,
@@ -154,6 +176,19 @@ export async function executeMaintenance(actor = 'cron_maintenance', reason = 'S
 }
 
 export async function createApp() {
+  // Item 5: Refuse to start if ENCRYPTION_KEY is missing from environment
+  assertEncryptionConfigured();
+
+  // Fail closed in production: never fall back to in-memory demo data or weak secrets.
+  if (isProductionRuntime()) {
+    if (!isDbConfigured) {
+      throw new Error('FATAL: DATABASE_URL is not set. Refusing to run in production without a database.');
+    }
+    if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) {
+      throw new Error('FATAL: AUTH_SECRET must be set to a random value of 32+ characters.');
+    }
+  }
+
   const app = express();
 
   // STAGE 1 Requirement 5: Set trust proxy for Render / Cloud Run reverse proxy IP accuracy
@@ -427,11 +462,10 @@ export async function createApp() {
         );
 
         // Create new session & set HttpOnly cookie
-        const sessionId = await createSession(user.id, clientIp, userAgent, res);
+        await createSession(user.id, clientIp, userAgent, res);
 
         res.json({
           success: true,
-          sessionId, // also returned for curl / testing
           user: {
             id: user.id,
             email: user.email,
@@ -735,7 +769,7 @@ export async function createApp() {
     if (isDbConfigured) {
       try {
         const portalData = await withRequestContext(session, async (client) => {
-          // Read user profile
+          // Read user profile with organisation name
           const userRes = await client.query(
             `SELECT u.id, u.email, u.full_name, u.phone, u.role, u.organisation_id, u.email_verified, u.created_at,
                     o.name AS organisation_name
@@ -745,42 +779,50 @@ export async function createApp() {
             [session.userId]
           );
 
-          // Read tenant subscriptions (Filtered automatically by RLS)
+          // Read tenant subscriptions with organisation & plan names (Filtered automatically by RLS)
           const subRes = await client.query(
-            `SELECT * FROM public.subscriptions ORDER BY created_at DESC;`
+            `SELECT sub.*, o.name AS organisation_name, p.name AS plan_name
+             FROM public.subscriptions sub
+             LEFT JOIN public.organisations o ON sub.organisation_id = o.id
+             LEFT JOIN public.plans p ON sub.plan_id = p.id
+             ORDER BY sub.created_at DESC;`
           );
 
-          // Read tenant invoices (Filtered automatically by RLS)
+          // Read tenant invoices with organisation name (Filtered automatically by RLS)
           const invRes = await client.query(
-            `SELECT * FROM public.invoices ORDER BY issued_at DESC;`
+            `SELECT inv.*, o.name AS organisation_name
+             FROM public.invoices inv
+             LEFT JOIN public.organisations o ON inv.organisation_id = o.id
+             ORDER BY inv.issued_at DESC;`
           );
 
-          // Read tenant school licences (Filtered automatically by RLS)
+          // Read tenant school licences with school_name & organisation_name (Filtered automatically by RLS)
           const licRes = await client.query(
-            `SELECT * FROM public.licences ORDER BY created_at DESC;`
+            `SELECT l.*, s.name AS school_name, s.state_location, s.contact_person, s.contact_email, s.contact_phone,
+                    o.name AS organisation_name, p.name AS plan_name
+             FROM public.licences l
+             LEFT JOIN public.schools s ON l.school_id = s.id
+             LEFT JOIN public.organisations o ON l.organisation_id = o.id
+             LEFT JOIN public.plans p ON l.plan_id = p.id
+             ORDER BY l.created_at DESC;`
           );
 
-          // Read learner enrolments (Filtered automatically by RLS)
+          // Read learner enrolments with learner details and organisation name (Filtered automatically by RLS)
           const enrRes = await client.query(
-            `SELECT * FROM public.enrolments ORDER BY enrolled_at DESC;`
+            `SELECT e.*, u.full_name AS learner_name, u.email AS learner_email, o.name AS organisation_name, c.title AS course_title
+             FROM public.enrolments e
+             LEFT JOIN public.users u ON e.learner_id = u.id
+             LEFT JOIN public.organisations o ON u.organisation_id = o.id
+             LEFT JOIN public.courses c ON e.course_id = c.id
+             ORDER BY e.enrolled_at DESC;`
           );
 
           return {
-            profile: userRes.rows[0] && {
-              id: userRes.rows[0].id,
-              name: userRes.rows[0].full_name,
-              email: userRes.rows[0].email,
-              role: userRes.rows[0].role,
-              organisationName: userRes.rows[0].organisation_name || '',
-              organisationId: userRes.rows[0].organisation_id || '',
-              phone: userRes.rows[0].phone || '',
-              status: userRes.rows[0].email_verified ? 'Active' : 'Pending Verification',
-              createdAt: userRes.rows[0].created_at,
-            },
-            subscriptions: subRes.rows,
-            invoices: invRes.rows,
-            schoolLicences: licRes.rows,
-            enrolments: enrRes.rows,
+            profile: userRes.rows[0] ? mapUserProfileRow(userRes.rows[0]) : null,
+            subscriptions: subRes.rows.map(mapSubscriptionRow),
+            invoices: invRes.rows.map(mapInvoiceRow),
+            schoolLicences: licRes.rows.map(mapLicenceRow),
+            enrolments: enrRes.rows.map(mapEnrolmentRow),
           };
         });
 
@@ -822,15 +864,35 @@ export async function createApp() {
           const isSuperAdmin = session.role === 'admin';
 
           const usersRes = isSuperAdmin
-            ? await client.query(`SELECT id, email, full_name, role, organisation_id, email_verified, created_at FROM public.users ORDER BY created_at DESC;`)
+            ? await client.query(
+                `SELECT u.id, u.email, u.full_name, u.role, u.organisation_id, u.email_verified, u.created_at,
+                        o.name AS organisation_name
+                 FROM public.users u
+                 LEFT JOIN public.organisations o ON u.organisation_id = o.id
+                 ORDER BY u.created_at DESC;`
+              )
             : { rows: [] };
 
           const subsRes = isSuperAdmin
-            ? await client.query(`SELECT * FROM public.subscriptions ORDER BY created_at DESC;`)
+            ? await client.query(
+                `SELECT sub.*, o.name AS organisation_name, p.name AS plan_name
+                 FROM public.subscriptions sub
+                 LEFT JOIN public.organisations o ON sub.organisation_id = o.id
+                 LEFT JOIN public.plans p ON sub.plan_id = p.id
+                 ORDER BY sub.created_at DESC;`
+              )
             : { rows: [] };
 
           const licsRes = isSuperAdmin
-            ? await client.query(`SELECT * FROM public.licences ORDER BY created_at DESC;`)
+            ? await client.query(
+                `SELECT l.*, s.name AS school_name, s.state_location, s.contact_person, s.contact_email, s.contact_phone,
+                        o.name AS organisation_name, p.name AS plan_name
+                 FROM public.licences l
+                 LEFT JOIN public.schools s ON l.school_id = s.id
+                 LEFT JOIN public.organisations o ON l.organisation_id = o.id
+                 LEFT JOIN public.plans p ON l.plan_id = p.id
+                 ORDER BY l.created_at DESC;`
+              )
             : { rows: [] };
 
           const enqsRes = await client.query(`SELECT * FROM public.enquiries ORDER BY created_at DESC;`);
@@ -840,11 +902,11 @@ export async function createApp() {
             : { rows: [] };
 
           return {
-            users: usersRes.rows,
-            subscriptions: subsRes.rows,
-            schoolLicences: licsRes.rows,
-            enquiries: enqsRes.rows,
-            auditLogs: auditsRes.rows,
+            users: usersRes.rows.map(mapUserProfileRow),
+            subscriptions: subsRes.rows.map(mapSubscriptionRow),
+            schoolLicences: licsRes.rows.map(mapLicenceRow),
+            enquiries: enqsRes.rows.map(mapEnquiryRow),
+            auditLogs: auditsRes.rows.map(mapAuditLogRow),
             callerRole: session.role,
           };
         });
@@ -903,19 +965,32 @@ export async function createApp() {
       try {
         const client = await pool.connect();
         try {
-          const [servicesRes, plansRes, coursesRes, postsRes] = await Promise.all([
+          const [servicesRes, plansRes, coursesRes, modulesRes, lessonsRes, postsRes, policiesRes] = await Promise.all([
             client.query(`SELECT * FROM public.services ORDER BY index_number ASC;`),
             client.query(`SELECT * FROM public.plans WHERE is_active = true ORDER BY price_ngn ASC;`),
             client.query(`SELECT * FROM public.courses WHERE is_published = true ORDER BY created_at DESC;`),
+            client.query(`SELECT * FROM public.modules ORDER BY sort_order ASC, created_at ASC;`),
+            client.query(`SELECT * FROM public.lessons ORDER BY sort_order ASC, created_at ASC;`),
             client.query(`SELECT * FROM public.blog_posts WHERE status = 'Published' ORDER BY published_at DESC;`),
+            client.query(`SELECT * FROM public.policies ORDER BY id ASC;`),
           ]);
 
+          const mappedCourses = coursesRes.rows.map((c: any) => {
+            const courseModules = modulesRes.rows
+              .filter((m: any) => m.course_id === c.id)
+              .map((m: any) => ({
+                ...m,
+                lessons: lessonsRes.rows.filter((l: any) => l.module_id === m.id),
+              }));
+            return mapCourseRow(c, courseModules);
+          });
+
           res.json({
-            services: servicesRes.rows.length > 0 ? servicesRes.rows : localDb.services,
-            plans: plansRes.rows.length > 0 ? plansRes.rows : localDb.plans,
-            courses: coursesRes.rows.length > 0 ? coursesRes.rows : localDb.courses,
-            blogPosts: postsRes.rows.length > 0 ? postsRes.rows : localDb.blogPosts,
-            policies: localDb.policies,
+            services: servicesRes.rows.length > 0 ? servicesRes.rows.map(mapServiceRow) : localDb.services,
+            plans: plansRes.rows.length > 0 ? plansRes.rows.map(mapPlanRow) : localDb.plans,
+            courses: coursesRes.rows.length > 0 ? mappedCourses : localDb.courses,
+            blogPosts: postsRes.rows.length > 0 ? postsRes.rows.map(mapBlogPostRow) : localDb.blogPosts,
+            policies: policiesRes.rows.length > 0 ? policiesRes.rows.map(mapPolicyRow) : localDb.policies,
             databaseConfigured: true,
           });
           return;
@@ -1002,12 +1077,19 @@ export async function createApp() {
     });
   });
 
-  // POST /api/v1/licensing/verify: Real School Licensing API
+  // POST /api/v1/licensing/verify: Real School Licensing API (Item 4: Hash-based lookup)
   app.post('/api/v1/licensing/verify', async (req, res) => {
     const clientIp = req.ip || '127.0.0.1';
-    const { licenceKey, workflowType = 'result_analysis' } = req.body;
+    const body = req.body || {};
+    const licenceKey: unknown = body.licenceKey;
+    const workflowType: string =
+      typeof body.workflowType === 'string' && body.workflowType.trim()
+        ? body.workflowType.trim().slice(0, 64)
+        : 'result_analysis';
 
-    const rateOk = await checkRateLimit(`lic:${clientIp}:${licenceKey || 'none'}`, 30, 60);
+    // Rate limit by client IP only. Keying on the supplied licence key would let a caller
+    // dodge the limit by changing the key on every request.
+    const rateOk = await checkRateLimit(`lic:ip:${clientIp}`, 120, 60);
     if (!rateOk) {
       res.status(429).json({
         decision: 'DENY',
@@ -1017,7 +1099,7 @@ export async function createApp() {
       return;
     }
 
-    if (!licenceKey || !licenceKey.startsWith('AVC-SCH-')) {
+    if (typeof licenceKey !== 'string' || !licenceKey.startsWith('AVC-SCH-') || licenceKey.length > 100) {
       res.status(401).json({
         decision: 'DENY',
         code: 'INVALID_LICENCE_FORMAT',
@@ -1029,12 +1111,14 @@ export async function createApp() {
     if (isDbConfigured) {
       try {
         return await runAsSystem('licensing_engine', 'School Licence Verification', async (client) => {
+          // Item 4: Look up by SHA-256 hash of the licence key
+          const keyHash = crypto.createHash('sha256').update(licenceKey.trim()).digest('hex');
           const licRes = await client.query(
             `SELECT l.*, s.name AS school_name
              FROM public.licences l
              JOIN public.schools s ON l.school_id = s.id
-             WHERE l.licence_key = $1;`,
-            [licenceKey.trim()]
+             WHERE l.licence_key_hash = $1;`,
+            [keyHash]
           );
 
           if (licRes.rows.length === 0) {
@@ -1068,32 +1152,73 @@ export async function createApp() {
             return;
           }
 
-          if (lic.credit_allowance - lic.credits_used < 1) {
-            res.status(402).json({
-              decision: 'DENY',
-              code: 'CREDIT_EXHAUSTED',
-              message: 'Workflow credit allowance exhausted for current term.',
-            });
-            return;
+          const idempotencyKey =
+            typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()
+              ? body.idempotencyKey.trim().slice(0, 128)
+              : `idemp_${crypto.randomBytes(12).toString('hex')}`;
+
+          // Reserve the idempotency key first. A repeated key is a replay and never deducts a second credit.
+          const reserve = await client.query(
+            `INSERT INTO public.usage_records (
+               organisation_id, licence_id, school_id, workflow_type, idempotency_key,
+               credits_deducted, remaining_credits, outcome, reason, ip_address
+             ) VALUES ($1, $2, $3, $4, $5, 1, 0, 'ALLOW', 'Entitlement verified', $6)
+             ON CONFLICT (idempotency_key) DO NOTHING
+             RETURNING id;`,
+            [lic.organisation_id, lic.id, lic.school_id, workflowType, idempotencyKey, clientIp]
+          );
+
+          let remainingCredits: number;
+          let creditsDeducted = 1;
+
+          if (reserve.rows.length === 0) {
+            const prior = await client.query(
+              `SELECT remaining_credits, licence_id FROM public.usage_records WHERE idempotency_key = $1;`,
+              [idempotencyKey]
+            );
+            if (prior.rows.length === 0 || prior.rows[0].licence_id !== lic.id) {
+              res.status(409).json({
+                decision: 'DENY',
+                code: 'IDEMPOTENCY_KEY_CONFLICT',
+                message: 'This idempotency key has already been used. Send a new unique key.',
+              });
+              return;
+            }
+            remainingCredits = Number(prior.rows[0].remaining_credits);
+            creditsDeducted = 0;
+          } else {
+            // Atomic deduction: the WHERE clause is the credit check, so concurrent calls cannot overspend.
+            const deduct = await client.query(
+              `UPDATE public.licences
+               SET credits_used = credits_used + 1, updated_at = now()
+               WHERE id = $1 AND status = 'Active' AND credits_used < credit_allowance
+               RETURNING credit_allowance - credits_used AS remaining;`,
+              [lic.id]
+            );
+            if (deduct.rows.length === 0) {
+              await client.query(`DELETE FROM public.usage_records WHERE id = $1;`, [reserve.rows[0].id]);
+              res.status(402).json({
+                decision: 'DENY',
+                code: 'CREDIT_EXHAUSTED',
+                message: 'Workflow credit allowance exhausted for current term.',
+              });
+              return;
+            }
+            remainingCredits = Number(deduct.rows[0].remaining);
+            await client.query(`UPDATE public.usage_records SET remaining_credits = $1 WHERE id = $2;`, [
+              remainingCredits,
+              reserve.rows[0].id,
+            ]);
           }
 
-          // Deduct credit & insert usage record
-          await client.query(
-            `UPDATE public.licences SET credits_used = credits_used + 1, updated_at = now() WHERE id = $1;`,
-            [lic.id]
-          );
-
-          await client.query(
-            `INSERT INTO public.usage_records (licence_id, school_id, organisation_id, workflow_type, credits_consumed, ip_address)
-             VALUES ($1, $2, $3, $4, 1, $5);`,
-            [lic.id, lic.school_id, lic.organisation_id, workflowType, clientIp]
-          );
-
-          const remainingCredits = lic.credit_allowance - (lic.credits_used + 1);
+          const signingSecret = process.env.AUTH_SECRET;
+          if (!signingSecret) {
+            throw new Error('AUTH_SECRET is required to sign entitlement tokens.');
+          }
           const validUntil = new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString();
           const tokenSignature = crypto
-            .createHmac('sha256', process.env.AUTH_SECRET || 'lic_entitlement_secret_2026')
-            .update(`${lic.school_id}:${lic.licence_key}:${workflowType}:${validUntil}`)
+            .createHmac('sha256', signingSecret)
+            .update(`${lic.school_id}:${lic.licence_key_hash}:${workflowType}:${validUntil}`)
             .digest('hex');
 
           res.json({
@@ -1102,7 +1227,7 @@ export async function createApp() {
             schoolId: lic.school_id,
             schoolName: lic.school_name,
             workflowType,
-            creditsDeducted: 1,
+            creditsDeducted,
             remainingCredits,
             signedEntitlementToken: {
               token: `avc_sig_${tokenSignature.slice(0, 32)}`,
@@ -1139,6 +1264,832 @@ export async function createApp() {
         cachePolicy: 'Valid for 72 hours.',
       },
     });
+  });
+
+  // --------------------------------------------------------------------------
+  // PAYMENTS & SUBSCRIPTIONS (Item 2 & Item 4)
+  // --------------------------------------------------------------------------
+
+  // POST /api/payments/verify
+  // Strict guard: 403 unless ALLOW_SIMULATED_PAYMENTS=true AND NODE_ENV is not production.
+  // Never sets webhookVerified true or status Paid without real provider verification.
+  app.post('/api/payments/verify', async (req, res) => {
+    if (process.env.ALLOW_SIMULATED_PAYMENTS !== 'true' || isProductionRuntime()) {
+      res.status(403).json({
+        error: 'Forbidden: Simulated payment verification is disabled. Real Paystack webhook verification required.',
+      });
+      return;
+    }
+
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return;
+    }
+
+    const { planId, provider = 'Paystack', organisationName, contactPhone, stateLocation } = req.body;
+
+    if (isDbConfigured) {
+      try {
+        const result = await withRequestContext(session, async (client) => {
+          // 1. Resolve or create organisation
+          let orgId = session.orgId;
+          if (!orgId) {
+            const orgName = organisationName || 'School Client Organisation';
+            const newOrgRes = await client.query(
+              `INSERT INTO public.organisations (name) VALUES ($1) RETURNING id;`,
+              [orgName]
+            );
+            orgId = newOrgRes.rows[0].id;
+            await client.query(`UPDATE public.users SET organisation_id = $1 WHERE id = $2;`, [orgId, session.userId]);
+          }
+
+          // 2. Resolve plan
+          let planRow: any = null;
+          if (planId) {
+            const pRes = await client.query(
+              `SELECT * FROM public.plans WHERE id::text = $1 OR code = $1 LIMIT 1;`,
+              [String(planId)]
+            );
+            if (pRes.rows.length > 0) {
+              planRow = pRes.rows[0];
+            }
+          }
+          if (!planRow) {
+            const defaultPlanRes = await client.query(`SELECT * FROM public.plans WHERE is_active = true LIMIT 1;`);
+            planRow = defaultPlanRes.rows[0];
+          }
+
+          const priceNgn = planRow ? planRow.price_ngn : 500000;
+          const planDbId = planRow ? planRow.id : null;
+          const durationDays = planRow ? (planRow.duration_days || 365) : 365;
+
+          // 3. Create Subscription (webhook_verified MUST be false, status MUST NOT be 'Paid')
+          const subRef = `sim_${crypto.randomBytes(8).toString('hex')}`;
+          const subRes = await client.query(
+            `INSERT INTO public.subscriptions (
+               organisation_id, user_id, plan_id, amount_ngn, billing_interval,
+               status, start_date, expiry_date, payment_provider, payment_reference,
+               webhook_verified, auto_renew
+             ) VALUES (
+               $1, $2, $3, $4, 'Annual',
+               'Pending Verification', CURRENT_DATE, CURRENT_DATE + ($5 * interval '1 day'), $6, $7,
+               false, false
+             ) RETURNING id;`,
+            [orgId, session.userId, planDbId, priceNgn, durationDays, provider, subRef]
+          );
+          const subscriptionId = subRes.rows[0].id;
+
+          // 4. Create Invoice (status MUST NOT be 'Paid')
+          const invoiceId = `inv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+          await client.query(
+            `INSERT INTO public.invoices (
+               id, subscription_id, organisation_id, amount_ngn, status, provider_reference, description
+             ) VALUES (
+               $1, $2, $3, $4, 'Pending Webhook', $5, $6
+             );`,
+            [invoiceId, subscriptionId, orgId, priceNgn, subRef, `Simulated onboarding for ${organisationName || 'School'}`]
+          );
+
+          // 5. Create Payment record (status: 'Pending Webhook')
+          await client.query(
+            `INSERT INTO public.payments (
+               organisation_id, subscription_id, amount_kobo, currency, provider, reference, status
+             ) VALUES (
+               $1, $2, $3, 'NGN', $4, $5, 'Pending Webhook'
+             );`,
+            [orgId, subscriptionId, priceNgn * 100, provider, subRef]
+          );
+
+          // 6. Create School
+          const schoolCode = `SCH-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+          const schRes = await client.query(
+            `INSERT INTO public.schools (
+               organisation_id, school_code, name, state_location, contact_person, contact_email, contact_phone
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             ) RETURNING id;`,
+            [
+              orgId,
+              schoolCode,
+              organisationName || 'Registered Institution',
+              stateLocation || 'Lagos State',
+              session.email,
+              session.email,
+              contactPhone || '+234 800 000 0000',
+            ]
+          );
+          const schoolId = schRes.rows[0].id;
+
+          // 7. Generate 128-bit Licence Key (Item 4: formatted AVC-SCH-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX)
+          const { licenceKey, keyHash, last4 } = generateLicenceKey();
+          const licRes = await client.query(
+            `INSERT INTO public.licences (
+               organisation_id, school_id, plan_id, licence_key_hash, licence_key_last4,
+               status, activation_date, expiry_date, credit_allowance, credits_used,
+               credit_unit, deployment_status, n8n_instance_version
+             ) VALUES (
+               $1, $2, $3, $4, $5,
+               'Active', CURRENT_DATE, CURRENT_DATE + ($6 * interval '1 day'), 2500, 0,
+               'Workflow Executions', 'Local n8n Configured', 'n8n@1.62.4 (Self-Hosted)'
+             ) RETURNING id, expiry_date;`,
+            [orgId, schoolId, planDbId, keyHash, last4, durationDays]
+          );
+
+          return {
+            subscriptionId,
+            invoiceId,
+            schoolLicence: {
+              id: licRes.rows[0].id,
+              licenceKey, // Shown once to user on issuance
+              schoolId,
+              expiryDate: new Date(licRes.rows[0].expiry_date).toISOString().split('T')[0],
+            },
+            webhookSignatureHash: `sim_whk_${crypto.randomBytes(16).toString('hex')}`,
+          };
+        });
+
+        res.json({
+          success: true,
+          simulated: true,
+          notice: 'Simulated payment registered. Status is Pending and webhook_verified is false.',
+          ...result,
+        });
+        return;
+      } catch (err: any) {
+        console.error('[PAYMENTS VERIFY ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to record simulated payment.' });
+        return;
+      }
+    }
+
+    res.status(500).json({ error: 'Database is required for payment simulation.' });
+  });
+
+  // --------------------------------------------------------------------------
+  // SCHOOL CREDENTIAL VAULT (Item 5 & Item 8)
+  // --------------------------------------------------------------------------
+
+  // POST /api/schools/:id/credentials
+  // Encrypts school AI credentials with AES-256-GCM using ENCRYPTION_KEY from environment (random IV per record).
+  // Refuses to start or save if ENCRYPTION_KEY is missing. Never falls back to default.
+  app.post('/api/schools/:id/credentials', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { providerName, rawApiKey } = req.body;
+
+    if (!rawApiKey || typeof rawApiKey !== 'string') {
+      res.status(400).json({ error: 'Valid rawApiKey is required.' });
+      return;
+    }
+
+    // Encrypt credential using AES-256-GCM (Item 5: will throw and refuse if ENCRYPTION_KEY is missing)
+    let encryptedPayload: string;
+    try {
+      encryptedPayload = encryptAiCredential(rawApiKey.trim());
+    } catch (encErr: any) {
+      res.status(500).json({ error: encErr.message || 'Encryption failure. Refusing to save.' });
+      return;
+    }
+
+    const maskedKey = `sk-••••••${rawApiKey.trim().slice(-4)}`;
+
+    if (isDbConfigured) {
+      try {
+        const updated = await withRequestContext(session, async (client) => {
+          // Verify licence exists and belongs to caller's organisation (or caller is admin)
+          const licCheck = await client.query(
+            `SELECT l.id, l.organisation_id
+             FROM public.licences l
+             WHERE (l.id::text = $1 OR l.school_id::text = $1);`,
+            [id]
+          );
+
+          if (licCheck.rows.length === 0) {
+            return { notFound: true };
+          }
+
+          const lic = licCheck.rows[0];
+          if (session.role !== 'admin' && lic.organisation_id !== session.orgId) {
+            return { forbidden: true };
+          }
+
+          await client.query(
+            `UPDATE public.licences
+             SET encrypted_api_key = $1,
+                 ai_provider_name = $2,
+                 ai_provider_configured = true,
+                 masked_api_key = $3,
+                 updated_at = now()
+             WHERE id = $4;`,
+            [encryptedPayload, providerName || 'Google Gemini API', maskedKey, lic.id]
+          );
+
+          return { success: true };
+        });
+
+        if (updated.forbidden) {
+          res.status(403).json({ error: 'Forbidden: Access to another organisation licence is denied.' });
+          return;
+        }
+
+        if (updated.notFound) {
+          res.status(404).json({ error: 'Licence or school record not found.' });
+          return;
+        }
+
+        res.json({
+          success: true,
+          maskedApiKey: maskedKey,
+          securityNotice: 'School AI provider credential encrypted with AES-256-GCM and stored in credential vault.',
+        });
+        return;
+      } catch (err: any) {
+        console.error('[CREDENTIAL SAVE ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to save credential.' });
+        return;
+      }
+    }
+
+    res.status(500).json({ error: 'Database is required for credentials.' });
+  });
+
+  // GET /api/schools/:id/credentials (Item 5 & Item 8)
+  app.get('/api/schools/:id/credentials', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    if (isDbConfigured) {
+      try {
+        const credResult = await withRequestContext(session, async (client) => {
+          const licRes = await client.query(
+            `SELECT l.id, l.organisation_id, l.encrypted_api_key, l.ai_provider_name, l.masked_api_key, l.ai_provider_configured
+             FROM public.licences l
+             WHERE (l.id::text = $1 OR l.school_id::text = $1);`,
+            [id]
+          );
+
+          if (licRes.rows.length === 0) {
+            return { notFound: true };
+          }
+
+          const lic = licRes.rows[0];
+          if (session.role !== 'admin' && lic.organisation_id !== session.orgId) {
+            return { forbidden: true };
+          }
+
+          if (!lic.encrypted_api_key) {
+            return { configured: false };
+          }
+
+          // Decrypt to verify tag and integrity (Item 5: requires ENCRYPTION_KEY)
+          decryptAiCredential(lic.encrypted_api_key);
+
+          return {
+            configured: true,
+            providerName: lic.ai_provider_name,
+            maskedApiKey: lic.masked_api_key,
+          };
+        });
+
+        if (credResult.forbidden) {
+          res.status(403).json({ error: 'Forbidden: Access to another organisation licence credentials is denied.' });
+          return;
+        }
+
+        if (credResult.notFound) {
+          res.status(404).json({ error: 'Licence or school record not found.' });
+          return;
+        }
+
+        res.json(credResult);
+        return;
+      } catch (err: any) {
+        console.error('[CREDENTIAL RETRIEVE ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to retrieve credential status.' });
+        return;
+      }
+    }
+
+    res.status(500).json({ error: 'Database is required.' });
+  });
+
+  // --------------------------------------------------------------------------
+  // OPERATIONAL DATA EXPORT (Item 8)
+  // --------------------------------------------------------------------------
+
+  // GET /api/export/:entity: Admin only
+  app.get('/api/export/:entity', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    if (session.role !== 'admin') {
+      res.status(403).json({ error: 'Forbidden: Super Administrator role required for operational data export.' });
+      return;
+    }
+
+    const { entity } = req.params;
+
+    if (isDbConfigured) {
+      try {
+        const exportData = await withRequestContext(session, async (client) => {
+          switch (entity) {
+            case 'customers': {
+              const r = await client.query(
+                `SELECT u.id, u.email, u.full_name, u.role, u.organisation_id, u.email_verified, u.created_at,
+                        o.name AS organisation_name
+                 FROM public.users u
+                 LEFT JOIN public.organisations o ON u.organisation_id = o.id
+                 ORDER BY u.created_at DESC;`
+              );
+              return r.rows.map(mapUserProfileRow);
+            }
+            case 'subscriptions': {
+              const r = await client.query(
+                `SELECT sub.*, o.name AS organisation_name, p.name AS plan_name
+                 FROM public.subscriptions sub
+                 LEFT JOIN public.organisations o ON sub.organisation_id = o.id
+                 LEFT JOIN public.plans p ON sub.plan_id = p.id
+                 ORDER BY sub.created_at DESC;`
+              );
+              return r.rows.map(mapSubscriptionRow);
+            }
+            case 'licences': {
+              const r = await client.query(
+                `SELECT l.*, s.name AS school_name, s.state_location, s.contact_person, s.contact_email, s.contact_phone,
+                        o.name AS organisation_name, p.name AS plan_name
+                 FROM public.licences l
+                 LEFT JOIN public.schools s ON l.school_id = s.id
+                 LEFT JOIN public.organisations o ON l.organisation_id = o.id
+                 LEFT JOIN public.plans p ON l.plan_id = p.id
+                 ORDER BY l.created_at DESC;`
+              );
+              return r.rows.map(mapLicenceRow);
+            }
+            case 'invoices': {
+              const r = await client.query(
+                `SELECT inv.*, o.name AS organisation_name
+                 FROM public.invoices inv
+                 LEFT JOIN public.organisations o ON inv.organisation_id = o.id
+                 ORDER BY inv.issued_at DESC;`
+              );
+              return r.rows.map(mapInvoiceRow);
+            }
+            case 'enquiries': {
+              const r = await client.query(`SELECT * FROM public.enquiries ORDER BY created_at DESC;`);
+              return r.rows.map(mapEnquiryRow);
+            }
+            case 'academy': {
+              const r = await client.query(
+                `SELECT e.*, u.full_name AS learner_name, u.email AS learner_email, o.name AS organisation_name, c.title AS course_title
+                 FROM public.enrolments e
+                 LEFT JOIN public.users u ON e.learner_id = u.id
+                 LEFT JOIN public.organisations o ON u.organisation_id = o.id
+                 LEFT JOIN public.courses c ON e.course_id = c.id
+                 ORDER BY e.enrolled_at DESC;`
+              );
+              return r.rows.map(mapEnrolmentRow);
+            }
+            default:
+              return null;
+          }
+        });
+
+        if (exportData === null) {
+          res.status(404).json({ error: `Unknown export entity: ${entity}` });
+          return;
+        }
+
+        res.json({ entity, count: exportData.length, data: exportData });
+        return;
+      } catch (err: any) {
+        console.error('[EXPORT ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to generate operational export.' });
+        return;
+      }
+    }
+
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // --------------------------------------------------------------------------
+  // EDITORIAL, CONTENT & ADMINISTRATION ENDPOINTS (Item 8)
+  // --------------------------------------------------------------------------
+
+  // POST /api/blog: Admin/Editor only; Customers receive 403; Unauth receive 401
+  app.post('/api/blog', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!['admin', 'editor'].includes(session.role)) {
+      res.status(403).json({ error: 'Forbidden: Administrator or Editor role required to publish articles.' });
+      return;
+    }
+
+    const { title, slug, category, excerpt, content, status = 'Published' } = req.body;
+    if (!title) {
+      res.status(400).json({ error: 'Article title is required.' });
+      return;
+    }
+
+    const autoSlug = slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    if (isDbConfigured) {
+      try {
+        const postRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `INSERT INTO public.blog_posts (
+               slug, title, category, excerpt, content, author, author_role, published_at, status
+             ) VALUES ($1, $2, $3, $4, $5, $6, 'Avichas Insights Staff', CURRENT_DATE, $7)
+             RETURNING *;`,
+            [
+              autoSlug,
+              title,
+              category || 'AI & Technology',
+              excerpt || '',
+              Array.isArray(content) ? content.join('\n\n') : content || '',
+              session.email,
+              status,
+            ]
+          );
+        });
+        res.status(201).json({ success: true, post: mapBlogPostRow(postRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[BLOG POST ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to publish blog post.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // PUT /api/services/:id: Admin/Editor only; Customers receive 403; Unauth receive 401
+  app.put('/api/services/:id', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!['admin', 'editor'].includes(session.role)) {
+      res.status(403).json({ error: 'Forbidden: Administrator or Editor role required to modify services.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { title, startingPriceNgn, availabilityStatus } = req.body;
+
+    if (isDbConfigured) {
+      try {
+        const updateRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `UPDATE public.services
+             SET title = COALESCE($1, title),
+                 starting_price_ngn = COALESCE($2, starting_price_ngn),
+                 availability_status = COALESCE($3, availability_status),
+                 updated_at = now()
+             WHERE id = $4
+             RETURNING *;`,
+            [title, startingPriceNgn, availabilityStatus, id]
+          );
+        });
+
+        if (updateRes.rows.length === 0) {
+          res.status(404).json({ error: 'Service not found.' });
+          return;
+        }
+
+        res.json({ success: true, service: mapServiceRow(updateRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[SERVICE UPDATE ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update service.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // PUT /api/policies/:id: Admin only; Customers receive 403; Unauth receive 401
+  app.put('/api/policies/:id', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (session.role !== 'admin') {
+      res.status(403).json({ error: 'Forbidden: Super Administrator role required to modify legal policies.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { title, counselApprovalStatus, summary, sections } = req.body;
+
+    if (isDbConfigured) {
+      try {
+        const polRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `UPDATE public.policies
+             SET title = COALESCE($1, title),
+                 counsel_approval_status = COALESCE($2, counsel_approval_status),
+                 summary = COALESCE($3, summary),
+                 sections = COALESCE($4, sections),
+                 last_updated = CURRENT_DATE,
+                 updated_at = now()
+             WHERE id = $5
+             RETURNING *;`,
+            [title, counselApprovalStatus, summary, sections ? JSON.stringify(sections) : null, id]
+          );
+        });
+
+        if (polRes.rows.length === 0) {
+          res.status(404).json({ error: 'Policy document not found.' });
+          return;
+        }
+
+        res.json({ success: true, policy: mapPolicyRow(polRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[POLICY UPDATE ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update policy.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // PATCH /api/confirmations/:id: Admin only; Customers receive 403; Unauth receive 401
+  app.patch('/api/confirmations/:id', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (session.role !== 'admin') {
+      res.status(403).json({ error: 'Forbidden: Super Administrator role required to update pre-launch confirmations.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { status, currentResolutionNotes } = req.body;
+
+    if (isDbConfigured) {
+      try {
+        const confRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `UPDATE public.pre_launch_confirmations
+             SET status = COALESCE($1, status),
+                 current_resolution_notes = COALESCE($2, current_resolution_notes),
+                 updated_at = now()
+             WHERE id = $3
+             RETURNING *;`,
+            [status, currentResolutionNotes, id]
+          );
+        });
+
+        if (confRes.rows.length === 0) {
+          res.status(404).json({ error: 'Confirmation item not found.' });
+          return;
+        }
+
+        res.json({ success: true, confirmation: mapConfirmationRow(confRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[CONFIRMATION UPDATE ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update confirmation.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // PATCH /api/subscriptions/:id/status: Admin only; Customers receive 403; Unauth receive 401
+  app.patch('/api/subscriptions/:id/status', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (session.role !== 'admin') {
+      res.status(403).json({ error: 'Forbidden: Super Administrator role required to modify subscription status.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      res.status(400).json({ error: 'Target status is required.' });
+      return;
+    }
+
+    if (isDbConfigured) {
+      try {
+        const subRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `UPDATE public.subscriptions
+             SET status = $1, updated_at = now()
+             WHERE id::text = $2
+             RETURNING *;`,
+            [status, id]
+          );
+        });
+
+        if (subRes.rows.length === 0) {
+          res.status(404).json({ error: 'Subscription not found.' });
+          return;
+        }
+
+        res.json({ success: true, subscription: mapSubscriptionRow(subRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[SUBSCRIPTION STATUS ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update subscription status.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // PATCH /api/schools/:id/status: Admin only; Customers receive 403; Unauth receive 401
+  app.patch('/api/schools/:id/status', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (session.role !== 'admin') {
+      res.status(403).json({ error: 'Forbidden: Super Administrator role required to modify school licence status.' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      res.status(400).json({ error: 'Target status is required.' });
+      return;
+    }
+
+    if (isDbConfigured) {
+      try {
+        const licRes = await withRequestContext(session, async (client) => {
+          return await client.query(
+            `UPDATE public.licences
+             SET status = $1, updated_at = now()
+             WHERE id::text = $2 OR school_id::text = $2
+             RETURNING *;`,
+            [status, id]
+          );
+        });
+
+        if (licRes.rows.length === 0) {
+          res.status(404).json({ error: 'Licence or school record not found.' });
+          return;
+        }
+
+        res.json({ success: true, licence: mapLicenceRow(licRes.rows[0]) });
+        return;
+      } catch (err: any) {
+        console.error('[SCHOOL STATUS ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update school licence status.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // POST /api/academy/enrol (Enrol current user in a course)
+  app.post('/api/academy/enrol', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return;
+    }
+
+    const { courseId } = req.body;
+    if (!courseId) {
+      res.status(400).json({ error: 'courseId is required.' });
+      return;
+    }
+
+    if (isDbConfigured) {
+      try {
+        const enrolment = await withRequestContext(session, async (client) => {
+          // Check if already enrolled
+          const existing = await client.query(
+            `SELECT * FROM public.enrolments WHERE learner_id = $1 AND (course_id::text = $2 OR course_id IN (SELECT id FROM public.courses WHERE slug = $2));`,
+            [session.userId, String(courseId)]
+          );
+          if (existing.rows.length > 0) {
+            return mapEnrolmentRow(existing.rows[0]);
+          }
+
+          // Resolve course UUID
+          const courseRes = await client.query(
+            `SELECT id FROM public.courses WHERE id::text = $1 OR slug = $1 LIMIT 1;`,
+            [String(courseId)]
+          );
+          if (courseRes.rows.length === 0) {
+            throw new Error('Course not found');
+          }
+          const actualCourseId = courseRes.rows[0].id;
+
+          const ins = await client.query(
+            `INSERT INTO public.enrolments (
+               organisation_id, learner_id, course_id, payment_status, progress_percent, certificate_issued
+             ) VALUES ($1, $2, $3, 'Paid (Verified)', 0, false)
+             RETURNING *;`,
+            [session.orgId || null, session.userId, actualCourseId]
+          );
+
+          return mapEnrolmentRow(ins.rows[0]);
+        });
+
+        res.status(201).json({ success: true, enrolment });
+        return;
+      } catch (err: any) {
+        console.error('[ACADEMY ENROL ERROR]', err.message);
+        res.status(500).json({ error: err.message || 'Failed to complete enrolment.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
+  });
+
+  // POST /api/academy/enrolments/:id/toggle-lesson
+  app.post('/api/academy/enrolments/:id/toggle-lesson', async (req, res) => {
+    const session = await resolveSessionContext(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required. Please log in.' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    if (isDbConfigured) {
+      try {
+        const updated = await withRequestContext(session, async (client) => {
+          const enrRes = await client.query(
+            `SELECT * FROM public.enrolments WHERE id::text = $1;`,
+            [id]
+          );
+          if (enrRes.rows.length === 0) {
+            return null;
+          }
+          const enr = enrRes.rows[0];
+          if (session.role !== 'admin' && enr.learner_id !== session.userId) {
+            return { forbidden: true };
+          }
+
+          const newProgress = Math.min(100, (enr.progress_percent || 0) + 20);
+          const certIssued = newProgress >= 100;
+          const certSerial = certIssued && !enr.certificate_serial ? `AVC-CERT-${Date.now().toString(36).toUpperCase()}` : enr.certificate_serial;
+
+          const upd = await client.query(
+            `UPDATE public.enrolments
+             SET progress_percent = $1, certificate_issued = $2, certificate_serial = $3, updated_at = now()
+             WHERE id = $4
+             RETURNING *;`,
+            [newProgress, certIssued, certSerial, enr.id]
+          );
+          return mapEnrolmentRow(upd.rows[0]);
+        });
+
+        if (updated && (updated as any).forbidden) {
+          res.status(403).json({ error: 'Forbidden: You cannot modify another learner enrolment.' });
+          return;
+        }
+
+        if (!updated) {
+          res.status(404).json({ error: 'Enrolment not found.' });
+          return;
+        }
+
+        res.json({ success: true, enrolment: updated });
+        return;
+      } catch (err: any) {
+        console.error('[TOGGLE LESSON ERROR]', err.message);
+        res.status(500).json({ error: 'Failed to update lesson.' });
+        return;
+      }
+    }
+    res.status(500).json({ error: 'Database required.' });
   });
 
   return app;
