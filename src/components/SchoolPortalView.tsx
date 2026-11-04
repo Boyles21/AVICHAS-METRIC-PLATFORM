@@ -469,7 +469,7 @@ export const SchoolPortalView: React.FC<SchoolPortalViewProps> = ({
                 <div className="font-semibold text-[#0B1F33]">Security Enforcement (Section 7 & 8A):</div>
                 <p>
                   Raw payment-card details are never stored on Avichas servers. Cryptographic licence identifiers (
-                  <code className="font-mono-tabular">AVC-SCH-XXXX-XXXX-XXXX-XXXX</code>) are generated only after
+                  <code className="font-mono-tabular">AVC-SCH-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX</code>) are generated only after
                   server-side payment signature verification. Easily guessed school names are rejected as authentication.
                 </p>
               </div>
